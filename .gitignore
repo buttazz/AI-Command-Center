@@ -1,0 +1,34 @@
+# Repository-level generated/dependency files
+node_modules/
+**/node_modules/
+**/dist/
+**/build/
+**/coverage/
+**/.cache/
+
+# Secrets and runtime state
+.env
+.env.*
+!.env.example
+**/.env
+**/.env.*
+!**/.env.example
+**/secrets/
+**/state/
+**/data/
+**/logs/
+**/*.log
+**/*.ndjson
+**/*.secret
+**/*.vault
+**/*.vault.*
+**/*.key
+**/*.pem
+
+# Unrelated workspace projects/artifacts
+/astro-dodge/
+/astro-dodge-previous-session-scratch/
+/package.json
+
+# OS/editor files
+.DS_Store

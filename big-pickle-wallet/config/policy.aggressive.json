@@ -1,0 +1,95 @@
+{
+  "$comment": "Machine-readable source of truth for the aggressive risk profile. Loaded by src/policy/schema.ts. Every value here is enforced in deterministic code; no LLM can widen any of it at runtime.",
+
+  "profile": "aggressive",
+  "version": 1,
+
+  "network": {
+    "permitted": ["base-sepolia"],
+    "$comment_mainnet": "base is deliberately absent. Enabling it requires a separate mainnet policy file plus the human command `bpw control mainnet-enable`. Three independent gates also check this.",
+    "mainnetEnabled": false
+  },
+
+  "capital": {
+    "$comment_deployment": "targetDeploymentBps is a REPORTING TARGET for the allocator. It is never an input to any quality gate. A system required to hit a deployment number opens bad trades to fill the quota. See docs/AGGRESSIVE-MODE.md 2.1.",
+    "targetDeploymentBps": { "min": 7000, "max": 9000 },
+    "defaultPositionBps": { "min": 800, "max": 1200 },
+    "maxPositionBps": 2000,
+    "maxConcurrentPositions": 4,
+    "$comment_reserves": "Wei retained for gas, never deployable. Also the floor below which deploying is pointless.",
+    "gasReserveWei": "200000000000000",
+    "minDeployableUsdcMicros": "10000000"
+  },
+
+  "risk": {
+    "maxDailyDrawdownBps": 800,
+    "maxSingleTradeBps": 2000,
+    "maxDailyDeployBps": 9000,
+    "maxOpenExposureBps": 9000,
+    "consecutiveMaterialLossTrigger": 3,
+    "materialLossBpsOfPortfolio": 50,
+    "cooldownMs": 3600000,
+    "$comment_daily": "Drawdown is mark-to-market on open positions plus realised. A volatile book hits 8% on an ordinary alt flush, so the response is DE-RISK (block new risk, allow exits), not a blanket stop. See docs/AGGRESSIVE-MODE.md 2.2.",
+    "dailyLossResponse": "de-risk"
+  },
+
+  "execution": {
+    "$comment_edge": "Gate on net expected edge after costs, not on a raw slippage cap. Tight slippage caps reject exactly the breakout entries this strategy wants. Absolute bounds remain as circuit breakers against a hostile pool. See docs/AGGRESSIVE-MODE.md 2.3.",
+    "maxSlippageBps": 150,
+    "maxPriceImpactBps": 200,
+    "minExpectedEdgeBps": 15,
+    "assumedFeeBps": 30,
+    "maxGasWei": "800000000000000",
+    "requireInvalidation": true,
+    "forbidAveragingDown": true,
+    "requirePositiveEdgeAfterCosts": true,
+    "maxOpenOrdersInFlight": 1,
+    "$comment_dust": "Below this notional the gas and fee cost dominates and the edge calculation is noise.",
+    "minNotionalUsdcMicros": "5000000"
+  },
+
+  "assets": {
+    "allowSmallCaps": true,
+    "minLiquidityUsd": "50000",
+    "minVolume24hUsd": "100000",
+    "$comment_allowlist": "Empty allowlist means 'not restricted to a list'. The denylist always applies regardless.",
+    "allowlist": [],
+    "denylist": [],
+    "$comment_guards": "Structural safety checks the Scout/Risk agents must satisfy before a token is tradable at all.",
+    "rejectIfNoVerifiedSource": true,
+    "rejectIfHoneypotSuspected": true,
+    "rejectIfTransferSimulated": true,
+    "maxTopHolderConcentrationBps": 5000
+  },
+
+  "exits": {
+    "allowTrailingStops": true,
+    "trailingStopBps": 1500,
+    "allowPartialProfits": true,
+    "partialProfitAtBps": [3000, 6000, 10000],
+    "partialProfitSizeBps": 3000,
+    "$comment": "forceExitOnInvalidationBreach is a hard invariant: Big Pickle may exit early for any reason, but may never decline a forced exit. This is what makes max-loss enforceable.",
+    "forceExitOnInvalidationBreach": true,
+    "allowDiscretionaryEarlyExit": true
+  },
+
+  "concurrency": {
+    "$comment": "Aggressive rotation races the nonce. One signing slot, no parallelism in the signing path. See docs/AGGRESSIVE-MODE.md 3.4.",
+    "maxCorrelationBetweenOpenPositions": 8500,
+    "enforceCorrelationLimit": true
+  },
+
+  "circuitBreaker": {
+    "$comment": "Any trip freezes trading until a human resumes. Sticky by design. See docs/AGGRESSIVE-MODE.md 3.3.",
+    "enabled": true,
+    "tripOnAttestationFailure": true,
+    "tripOnBalanceMismatch": true,
+    "tripOnPositionBookDrift": true,
+    "tripOnRepeatedReverts": true,
+    "tripOnRpcInconsistency": true,
+    "tripOnGasPriceSpike": true,
+    "tripOnPolicyError": true,
+    "maxConsecutiveReverts": 3,
+    "positionBookDriftToleranceBps": 50
+  }
+}

@@ -1,0 +1,26 @@
+# Dependencies
+node_modules/
+dist/
+
+# Secrets — NEVER commit
+.env
+.env.*
+!.env.example
+*.secret
+secrets/
+state/
+data/
+*.vault
+*.vault.*
+*.key
+*.pem
+
+# Runtime artifacts
+logs/
+*.log
+audit/*.ndjson
+policy/*.applied.json
+gateway-tokens.json
+
+# OS
+.DS_Store
