@@ -425,8 +425,6 @@ export function parsePolicy(raw: unknown, sourcePath: string): Policy {
  * collectively incoherent. These are the mistakes that actually happen.
  */
 function assertPolicyCoherence(p: Policy): void {
-  const bpsAsUsdc = (bps: number) => Money.fromMicros(0).bps(bps);
-
   if (p.capital.maxPositionBps > p.risk.maxSingleTradeBps) {
     throw new PolicyConfigError(
       `capital.maxPositionBps (${p.capital.maxPositionBps}) exceeds risk.maxSingleTradeBps (${p.risk.maxSingleTradeBps}); a position could be opened larger than a single trade is allowed`,
@@ -441,13 +439,14 @@ function assertPolicyCoherence(p: Policy): void {
     // docs/AGGRESSIVE-MODE.md 2.1.
   }
 
-  if (p.execution.minNotionalUsdcMicros > 0n) {
-    const maxNotional = bpsAsUsdc(p.risk.maxSingleTradeBps);
-    if (p.execution.minNotionalUsdcMicros > maxNotional.micros) {
-      throw new PolicyConfigError(
-        `execution.minNotionalUsdcMicros (${p.execution.minNotionalUsdcMicros}) exceeds the largest trade the policy permits (${maxNotional.micros} micros = ${maxNotional.format()} USDC at 100% portfolio). Every trade would be rejected as dust.`,
-      );
-    }
+  // A basis-point position limit is relative to the live portfolio value, so it
+  // cannot be compared to an absolute minimum notional at policy-load time.
+  // The executor performs this check after deriving notional from the live
+  // portfolio. The only statically invalid case is a zero maximum trade limit.
+  if (p.execution.minNotionalUsdcMicros > 0n && p.risk.maxSingleTradeBps === 0) {
+    throw new PolicyConfigError(
+      `execution.minNotionalUsdcMicros (${p.execution.minNotionalUsdcMicros}) is non-zero but risk.maxSingleTradeBps is zero; every trade would be rejected as dust.`,
+    );
   }
 
   if (p.execution.maxSlippageBps + p.execution.assumedFeeBps + p.execution.minExpectedEdgeBps > 100_000) {

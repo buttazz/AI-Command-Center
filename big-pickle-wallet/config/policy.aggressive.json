@@ -6,7 +6,7 @@
 
   "network": {
     "permitted": ["base-sepolia"],
-    "$comment_mainnet": "base is deliberately absent. Enabling it requires a separate mainnet policy file plus the human command `bpw control mainnet-enable`. Three independent gates also check this.",
+    "$comment_mainnet": "base is deliberately absent. Enabling it requires a separate mainnet policy file plus a future explicit human enablement command. Three independent gates also check this.",
     "mainnetEnabled": false
   },
 

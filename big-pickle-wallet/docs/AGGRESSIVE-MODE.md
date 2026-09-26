@@ -172,11 +172,14 @@ before any agent opinion is consulted.
 
 ## 5. Deployment sequence — unchanged, and enforced
 
-1. **Simulation** — live market data, zero-value orders, full pipeline, no
-   signatures. Measures the strategy's edge and the policy engine's correctness.
-2. **Testnet (`base-sepolia`)** — real signatures, real transactions, worthless
-   ETH. Proves custody, policy enforcement, execution, and reconciliation.
-3. **Mainnet** — **disabled.** Requires an explicit human command
+1. **Foundation smoke/tests** — local temporary state, generated ephemeral
+   attestation keys, no network calls, no signatures, and no real money.
+2. **On-chain testnet (`base-sepolia`)** — real signatures, real transactions,
+   worthless ETH. Proves CDP custody, policy enforcement, execution, and
+   reconciliation for the secondary on-chain rail.
+3. **Advanced Trade paper simulation** — required before any exchange adapter;
+   Advanced Trade has no testnet and every live order reaches a real venue.
+4. **Mainnet/live exchange** — **disabled.** Requires an explicit human command
    (`control mainnet-enable`) *and* a separate mainnet policy with its own lower
    limits *and* a completed validation record. Three independent gates: the CDP
    Policy Engine, the local policy engine, and the executor's own network

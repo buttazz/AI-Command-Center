@@ -6,7 +6,22 @@ Status: accepted
 
 ---
 
-## 1. Coinbase architecture selection: A vs B
+## 1. Coinbase architecture selection: primary future rail and secondary on-chain rail
+
+**ADR-0002 is authoritative for the execution-substrate decision.**
+
+- **PRIMARY FUTURE EXCHANGE RAIL: Coinbase Advanced Trade**, called directly by
+  deterministic code. It is the intended future venue for Coinbase-listed spot
+  trading once an exchange adapter and paper-trading validation layer exist.
+- **SECONDARY / ON-CHAIN RAIL: CDP / Base execution.** The existing CDP wallet,
+  policy, attestation, executor, control-plane, and audit implementation remains
+  intact for Base Sepolia development and future on-chain settlement.
+- **Coinbase for Agents MCP/CLI:** out of the deterministic execution path; it is
+  retained only as a human-facing Coinbase surface and fiat rail.
+
+No exchange adapter is enabled by this foundation stage. The current runnable
+implementation is the CDP/Base control foundation, with Base Sepolia as the
+only permitted network in the committed aggressive policy.
 
 Two official Coinbase products were evaluated against the actual requirements.
 
@@ -47,25 +62,25 @@ CDP Wallets v2. `@coinbase/cdp-sdk`, optionally surfaced through AgentKit.
 | Testnet-first development | Not applicable (exchange accounts are mainnet-only) | Native `base-sepolia` | **B** |
 | On-chain programmable settlement | No | Yes (smart accounts, x402, paymaster) | **B** |
 
-### Decision: **Option B is the primary architecture. Option A is retained as a
-deliberately out-of-band fiat rail.**
+### Decision: **Advanced Trade is the primary future exchange rail. CDP/Base is
+the secondary on-chain rail. Coinbase for Agents remains out-of-band.**
 
-Reasoning, stated plainly: the single hardest requirement is *deterministic
-transaction execution*. Option A structurally cannot satisfy it, because the
-interface an agent uses to trade **is** the tool an LLM drives. Every additional
-safety measure would sit in front of a thing whose control surface is a model.
+Reasoning, stated plainly: Advanced Trade is the correct future venue for the
+specified spot momentum/rotation strategy, but it has no testnet, so it must be
+implemented behind a paper broker before any live adapter is considered. The
+existing CDP/Base rail is already deterministic and testnet-capable, so it
+remains the secondary on-chain execution path. In both cases, LLMs emit
+proposals only; deterministic code owns execution.
 
-Option B inverts that. The signing primitive is a normal SDK call. Deterministic
-code calls it. LLMs emit *proposals*, never signatures.
-
-Option A is kept because it genuinely solves something Option B does not: fiat
-on-ramp, custody of the reserve, and a human-facing trading surface for the owner.
+Coinbase for Agents is kept because it genuinely solves fiat on-ramp, custody
+of the reserve, and a human-facing trading surface for the owner, but it is not
+the autonomous executor.
 
 ### Separation of responsibilities
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
-│  COINBASE FOR AGENTS (Option A)  —  OUT OF THE EXECUTION PATH        │
+│  COINBASE FOR AGENTS  —  OUT OF THE EXECUTION PATH                    │
 │  • fiat on-ramp / off-ramp between the owner's bank and on-chain      │
 │  • manual owner trading surface (Coinbase UI)                        │
 │  • long-tail / low-liquidity spot products we do not self-execute    │
@@ -75,15 +90,24 @@ on-ramp, custody of the reserve, and a human-facing trading surface for the owne
             ▲  human-approved bridge only (never automatic)
             │
 ┌───────────┴──────────────────────────────────────────────────────────┐
-│  CDP AGENTIC WALLETS (Option B)  —  TREASURY + EXECUTION RAIL         │
+│  PRIMARY FUTURE: COINBASE ADVANCED TRADE                            │
+│  • deterministic REST/WS adapter behind a paper broker first         │
+│  • exchange spot execution after separate human enablement            │
+└──────────────────────────────────────────────────────────────────────┘
+             │
+             │ secondary on-chain rail
+             ▼
+┌──────────────────────────────────────────────────────────────────────┐
+│  SECONDARY: CDP AGENTIC WALLETS / BASE                              │
 │  • self-custody TEE accounts, base-sepolia now, mainnet later         │
 │  • Policy Engine enforced in the enclave                             │
 │  • deterministic executor calls the SDK; no LLM in the signing path   │
 └──────────────────────────────────────────────────────────────────────┘
 ```
 
-The bridge between A and B is a one-way, human-gated operation. This is the
-entire integration surface, and it is intentionally small.
+The Coinbase-for-Agents surface remains a one-way, human-gated fiat/manual
+bridge. Advanced Trade is a separate future exchange adapter and is not part of
+the current CDP/Base implementation. These boundaries are intentionally small.
 
 ---
 

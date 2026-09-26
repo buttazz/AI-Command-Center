@@ -218,7 +218,7 @@ export class ControlPlane {
    * should never be an unreviewed action.
    */
   releaseKillSwitch(by: string, reason: string): KillSwitchFile {
-    if (this.kill.engagedBy && this.kill.engagedBy !== "owner" && by !== "owner") {
+    if (by !== "owner") {
       throw new KillSwitchEngaged("all", this.kill.engagedAt ?? nowIso());
     }
     this.kill = { engaged: false, engagedAt: null, engagedBy: null, reason: null };
@@ -463,7 +463,7 @@ export class ControlPlane {
       reasons.push(
         `circuit breaker frozen at ${this.freeze.frozenAt ?? "unknown"}: ${this.freeze.tripReason ?? "unknown"}${this.freeze.tripDetail ? ` (${this.freeze.tripDetail})` : ""}`,
       );
-      reasons.push("a human must resume trading with `bpw control resume`");
+      reasons.push("a human must resume trading with `bpw unfreeze` or `npm run unfreeze`");
       return { allowed: false, state: "frozen", reasons };
     }
 

@@ -62,7 +62,6 @@ export async function quoteExactInputSingle(
       functionName: "quoteExactInputSingle",
       args: [{ tokenIn, tokenOut, amountIn, fee, sqrtPriceLimitX96: 0n }],
       account: ZERO_ADDRESS,
-      value: 0n,
     });
     return result as bigint;
   } catch {
@@ -130,13 +129,14 @@ export async function buildSwap(
     throw new Error("native ETH is not a supported swap input/output; trade USDC<->WETH and keep ETH for gas");
   }
 
-  const quote = params.fee
+  const requestedFee = params.fee;
+  const quote: Quote | null = requestedFee !== undefined
     ? await (async () => {
-        const out = await quoteExactInputSingle(client, params.tokenIn, params.tokenOut, params.amountIn, params.fee);
+        const out = await quoteExactInputSingle(client, params.tokenIn, params.tokenOut, params.amountIn, requestedFee);
         if (out === null || out === 0n) return null;
         const pools = await listPools(client, params.tokenIn, params.tokenOut);
-        const pool = pools.find((p) => p.fee === params.fee)?.address ?? ZERO_ADDRESS;
-        return { tokenIn: params.tokenIn, tokenOut: params.tokenOut, amountIn: params.amountIn, amountOut: out, fee: params.fee, pool };
+        const pool = pools.find((p) => p.fee === requestedFee)?.address ?? ZERO_ADDRESS;
+        return { tokenIn: params.tokenIn, tokenOut: params.tokenOut, amountIn: params.amountIn, amountOut: out, fee: requestedFee, pool };
       })()
     : await bestQuote(client, params.tokenIn, params.tokenOut, params.amountIn);
 
