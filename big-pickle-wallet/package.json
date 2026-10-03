@@ -16,6 +16,7 @@
     "kill": "tsx src/cli.ts kill",
     "audit": "tsx src/cli.ts audit",
     "smoke": "tsx scripts/smoke-test.ts",
+    "cockpit": "tsx src/cockpit/server.ts",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest"

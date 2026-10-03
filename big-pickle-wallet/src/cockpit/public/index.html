@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="robots" content="noindex, nofollow" />
+    <title>Big Pickle Simulation Cockpit — PAPER TRADING ONLY</title>
+    <link rel="stylesheet" href="/style.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="topbar-title">
+        <h1>Big Pickle Simulation Cockpit</h1>
+        <p class="badge-row">
+          <span class="badge badge-warn">SIMULATION</span>
+          <span class="badge badge-warn">PAPER TRADING</span>
+          <span class="badge badge-warn">NO LIVE FUNDS</span>
+          <span class="badge badge-muted">NO EXCHANGE</span>
+          <span class="badge badge-muted">NO CHAIN</span>
+          <span class="badge badge-muted">NO CDP CREDENTIALS</span>
+        </p>
+      </div>
+      <div class="topbar-meta">
+        <div class="meta-line">Loopback only · <span id="endpoint">http://127.0.0.1:8787</span></div>
+        <div class="meta-line">Tick <strong id="tick">–</strong> · updated <span id="updated">–</span></div>
+        <div class="actions">
+          <button type="button" data-global="step">Step simulation</button>
+          <button type="button" data-global="reset" class="danger">Reset both books</button>
+        </div>
+      </div>
+    </header>
+
+    <section class="ticker" id="ticker" aria-label="Synthetic market prices">
+      <span class="ticker-label">SYNTHETIC FEED (not a real market)</span>
+    </section>
+
+    <p class="disclaimer" id="disclaimer">
+      Synthetic prices, fake <code>PAPER-</code> order ids and locally simulated fills. Nothing here
+      can move money. No live trade endpoint exists in this server.
+    </p>
+
+    <main class="grid" id="accounts"></main>
+
+    <footer class="foot">
+      <p>
+        Isolated simulation roots: <code>state/cockpit/sovereign</code> and
+        <code>state/cockpit/constitution</code> — independent ControlPlane, AuditLog, balances and
+        positions. Real wallet/trader runtime state is never opened.
+      </p>
+      <p class="foot-warn">SIMULATION / PAPER TRADING — NOT INVESTMENT ADVICE — NO LIVE CAPITAL.</p>
+    </footer>
+
+    <script src="/app.js"></script>
+  </body>
+</html>

@@ -7,7 +7,9 @@ dist/
 .env.*
 !.env.example
 *.secret
-secrets/
+# Runtime secret location only (the encrypted vault lives at <pkg>/secrets/).
+# Source under src/secrets/ is code, not a secret, and must stay trackable.
+/secrets/
 state/
 data/
 *.vault

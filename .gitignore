@@ -13,7 +13,10 @@ node_modules/
 **/.env
 **/.env.*
 !**/.env.example
-**/secrets/
+# Runtime secrets live at the repo-root /secrets/ directory (and at each
+# package's own root, handled by that package's .gitignore). Source directories
+# such as big-pickle-wallet/src/secrets/ are code and stay trackable.
+/secrets/
 **/state/
 **/data/
 **/logs/
