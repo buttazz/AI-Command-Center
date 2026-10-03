@@ -23,6 +23,76 @@ import { Money } from "../core/money.js";
 import { PolicyError } from "../errors.js";
 import type { Hex } from "../types.js";
 
+/**
+ * Which market an order is for.
+ *
+ * The discriminator exists because two instrument classes have genuinely
+ * different structural risks, and conflating them either produces nonsense
+ * checks or requires weakening real ones. An on-chain token has holders, a
+ * contract address and a pool, so `assets.*` limits apply. A prediction
+ * contract has none of those but does have a book, a resolution date and a fee
+ * schedule, so `prediction.*` limits apply. The discriminator is opt-in and
+ * defaults to `onchain-token`, so every existing order takes exactly the path
+ * it took before this field existed.
+ */
+export type InstrumentClass = "onchain-token" | "prediction-contract";
+
+/**
+ * Prediction-specific facts supplied by the caller.
+ *
+ * Every field is optional so that a missing one can be treated as "not
+ * satisfied" rather than defaulted. Absence is never a pass.
+ */
+export interface PredictionOrderFacts {
+  /** Resting depth at top of book, both sides, micro-USDC. */
+  topOfBookLiquidityMicros?: bigint;
+  /** 24h traded notional, micro-USDC. */
+  volume24hMicros?: bigint;
+  /** Spread in basis points of the midpoint. */
+  spreadBps?: number;
+  /** Age of the book at decision time, milliseconds. */
+  dataAgeMs?: number;
+  /** Milliseconds remaining until the contract resolves. */
+  msToResolution?: number;
+  /** Group of contracts resolved by the same underlying fact. */
+  correlationGroup?: string;
+  /** Category the contract belongs to. */
+  category?: string;
+  /**
+   * Cost basis of the contract's full premium loss, micro-USDC.
+   *
+   * This is the bound that matters for a binary contract: it can resolve
+   * worthless, so the true worst case is the entire premium plus fees,
+   * regardless of any stop-out the model imagines.
+   */
+  fullPremiumLossMicros?: bigint;
+  /** Number of prediction positions currently open. */
+  openPredictionPositions?: number;
+  /** Open exposure in this contract's category, micro-USDC. */
+  categoryExposureMicros?: bigint;
+  /** Open exposure in this contract's correlation group, micro-USDC. */
+  correlationGroupExposureMicros?: bigint;
+  /** Correlation to the closest open position, bps. Null when none is open. */
+  correlationToOpenBps?: number | null;
+  /**
+   * Cost of one minimum-size position, micro-USDC, principal plus fees.
+   *
+   * Supplied by the caller because only the caller knows the entry price. Used
+   * as the prediction-path substitute for `execution.minNotionalUsdcMicros`,
+   * which is denominated in gas terms and does not transfer to a contract book.
+   */
+  minContractCostMicros?: bigint;
+  /**
+   * Expected return on cost after fees, spread, slippage and safety margin.
+   *
+   * Supplied by the research layer and re-checked here against
+   * `prediction.minNetEdgeBps`. The Constitution verifies the arithmetic rather
+   * than trusting it, because a caller that can lower its own reported edge
+   * would otherwise be able to bypass the floor entirely.
+   */
+  netExpectedEdgeBps?: number;
+}
+
 export interface OpenPositionView {
   asset: Hex;
   symbol: string;
@@ -64,6 +134,10 @@ export interface OrderFacts {
   transferSimulationPassed: boolean;
   /** Extra facts assembled by the caller from Risk's structured findings. */
   riskFindings?: Record<string, boolean>;
+  /** Instrument class. Defaults to `onchain-token`; see `InstrumentClass`. */
+  instrument?: InstrumentClass;
+  /** Required, and only read, when `instrument` is `prediction-contract`. */
+  predictionFacts?: PredictionOrderFacts;
 }
 
 export interface PortfolioFacts {
@@ -178,45 +252,227 @@ export function evaluateOrder(
   // Checked first: a denylisted or structurally unsafe token should never reach
   // the sizing arithmetic, and reporting "position too large" for a honeypot
   // would be misleading.
+  //
+  // Skipped entirely for `prediction-contract`. These checks ask questions about
+  // an ERC-20 pool — is this address verified, is it a honeypot, how deep is the
+  // liquidity, how concentrated are the holders — and a prediction contract has no
+  // address to verify, no transfer to simulate and no holders. Pushing a synthetic
+  // contract id through them would mean asserting `tokenVerified: true` about
+  // something that is not a token, which is worse than not asking the question.
+  // The replacement limit set is section 1b, and it covers what matters here:
+  // liquidity, volume, spread, freshness, horizon, worst-case loss, concentration
+  // and correlation.
 
-  if (policy.assets.denylist.includes(assetKey)) {
-    fail("asset-denylisted", `asset ${order.symbol} (${order.asset}) is on the denylist`);
-  }
-  if (policy.assets.allowlist.length > 0 && !policy.assets.allowlist.includes(assetKey)) {
-    fail("asset-not-allowlisted", `asset ${order.symbol} (${order.asset}) is not on the allowlist`);
-  }
-  if (policy.assets.rejectIfNoVerifiedSource && !order.tokenVerified) {
-    fail("asset-unverified", `asset ${order.symbol} has no verified contract source`);
-  }
-  if (policy.assets.rejectIfHoneypotSuspected && order.honeypotSuspected) {
-    fail("asset-honeypot", `asset ${order.symbol} is suspected of honeypot behaviour (sell-blocking)`);
-  }
-  if (policy.assets.rejectIfTransferSimulated && !order.transferSimulationPassed) {
-    fail("asset-transfer-reverts", `simulated transfer of ${order.symbol} reverted`);
-  }
-  if (order.topHolderConcentrationBps > policy.assets.maxTopHolderConcentrationBps) {
-    fail(
-      "asset-holder-concentration",
-      `top holder holds ${order.topHolderConcentrationBps} bps of ${order.symbol}, above the ${policy.assets.maxTopHolderConcentrationBps} bps limit`,
-    );
-  }
-  if (order.liquidityUsd < policy.assets.minLiquidityUsd) {
-    fail(
-      "insufficient-liquidity",
-      `${order.symbol} liquidity ${order.liquidityUsd} USD below the ${policy.assets.minLiquidityUsd} USD minimum`,
-    );
-  }
-  if (order.volume24hUsd < policy.assets.minVolume24hUsd) {
-    fail(
-      "insufficient-volume",
-      `${order.symbol} 24h volume ${order.volume24hUsd} USD below the ${policy.assets.minVolume24hUsd} USD minimum`,
-    );
+  if ((order.instrument ?? "onchain-token") === "onchain-token") {
+    if (policy.assets.denylist.includes(assetKey)) {
+      fail("asset-denylisted", `asset ${order.symbol} (${order.asset}) is on the denylist`);
+    }
+    if (policy.assets.allowlist.length > 0 && !policy.assets.allowlist.includes(assetKey)) {
+      fail("asset-not-allowlisted", `asset ${order.symbol} (${order.asset}) is not on the allowlist`);
+    }
+    if (policy.assets.rejectIfNoVerifiedSource && !order.tokenVerified) {
+      fail("asset-unverified", `asset ${order.symbol} has no verified contract source`);
+    }
+    if (policy.assets.rejectIfHoneypotSuspected && order.honeypotSuspected) {
+      fail("asset-honeypot", `asset ${order.symbol} is suspected of honeypot behaviour (sell-blocking)`);
+    }
+    if (policy.assets.rejectIfTransferSimulated && !order.transferSimulationPassed) {
+      fail("asset-transfer-reverts", `simulated transfer of ${order.symbol} reverted`);
+    }
+    if (order.topHolderConcentrationBps > policy.assets.maxTopHolderConcentrationBps) {
+      fail(
+        "asset-holder-concentration",
+        `top holder holds ${order.topHolderConcentrationBps} bps of ${order.symbol}, above the ${policy.assets.maxTopHolderConcentrationBps} bps limit`,
+      );
+    }
+    if (order.liquidityUsd < policy.assets.minLiquidityUsd) {
+      fail(
+        "insufficient-liquidity",
+        `${order.symbol} liquidity ${order.liquidityUsd} USD below the ${policy.assets.minLiquidityUsd} USD minimum`,
+      );
+    }
+    if (order.volume24hUsd < policy.assets.minVolume24hUsd) {
+      fail(
+        "insufficient-volume",
+        `${order.symbol} 24h volume ${order.volume24hUsd} USD below the ${policy.assets.minVolume24hUsd} USD minimum`,
+      );
+    }
   }
 
   // Risk's structured findings, when the caller supplied them. An explicit
   // false is a veto; absence is not a pass, so only `false` is treated as a fail.
   for (const [name, passed] of Object.entries(order.riskFindings ?? {})) {
     if (passed === false) fail(`risk-finding:${name}`, `Risk reported ${name} is not satisfied`);
+  }
+
+  // --- 1b. prediction-market instrument admissibility --------------------
+  //
+  // Purely additional. Nothing above or below this block is skipped, relaxed or
+  // re-derived: an order that passes here still faces every existing rule. What
+  // changes is which floors apply to a prediction contract, because the on-chain
+  // ones describe a different instrument (see `PredictionPolicy` in schema.ts).
+  //
+  // It fails closed. A prediction order against a policy with no `prediction`
+  // section is refused, not evaluated against limits that do not exist.
+
+  if ((order.instrument ?? "onchain-token") === "prediction-contract") {
+    const pp = policy.prediction;
+    if (!pp || !pp.enabled) {
+      fail(
+        "prediction-not-enabled",
+        "this policy does not enable prediction-market instruments; prediction orders are refused rather than evaluated against limits that do not exist",
+      );
+    } else {
+      const pf = order.predictionFacts;
+
+      if (pf?.spreadBps === undefined) {
+        fail("invalid-market-data", "prediction order supplied no spread; a price cannot be checked without one");
+      } else if (pf.spreadBps > pp.maxSpreadBps) {
+        fail(
+          "spread-too-wide",
+          `spread ${pf.spreadBps} bps exceeds the ${pp.maxSpreadBps} bps prediction limit`,
+        );
+      }
+
+      if (pf?.topOfBookLiquidityMicros === undefined) {
+        fail("invalid-market-data", "prediction order supplied no top-of-book depth");
+      } else if (pf.topOfBookLiquidityMicros < pp.minTopOfBookLiquidityUsdcMicros) {
+        fail(
+          "insufficient-liquidity",
+          `top-of-book depth ${Money.fromMicros(pf.topOfBookLiquidityMicros).format()} USDC is below the ` +
+            `${Money.fromMicros(pp.minTopOfBookLiquidityUsdcMicros).format()} USDC prediction minimum`,
+        );
+      }
+
+      if (pf?.volume24hMicros === undefined) {
+        fail("invalid-market-data", "prediction order supplied no 24h volume");
+      } else if (pf.volume24hMicros < pp.minVolume24hUsdcMicros) {
+        fail(
+          "insufficient-volume",
+          `24h volume ${Money.fromMicros(pf.volume24hMicros).format()} USDC is below the ` +
+            `${Money.fromMicros(pp.minVolume24hUsdcMicros).format()} USDC prediction minimum`,
+        );
+      }
+
+      if (pf?.dataAgeMs === undefined) {
+        fail("invalid-market-data", "prediction order supplied no data timestamp, so freshness cannot be proven");
+      } else if (pf.dataAgeMs > pp.maxDataAgeMs) {
+        fail(
+          "stale-data",
+          `market data is ${pf.dataAgeMs} ms old, above the ${pp.maxDataAgeMs} ms freshness budget`,
+        );
+      }
+
+      if (pf?.msToResolution === undefined) {
+        fail("invalid-market-data", "prediction order supplied no resolution time");
+      } else if (pf.msToResolution < pp.minMsToResolution) {
+        fail(
+          "too-close-to-resolution",
+          `contract resolves in ${pf.msToResolution} ms, inside the ${pp.minMsToResolution} ms minimum horizon`,
+        );
+      }
+
+      // The real bound for a binary contract. Checked against the premium, not
+      // against `computeMaxLoss`, because a prediction contract does not have a
+      // stop: it settles, and it can settle worthless.
+      const fullLoss = pf?.fullPremiumLossMicros;
+      if (fullLoss === undefined) {
+        fail("invalid-market-data", "prediction order supplied no full-premium loss bound");
+      } else {
+        const cap = portfolio.totalValue.bps(pp.maxSingleContractLossBps);
+        if (fullLoss > cap.micros) {
+          fail(
+            "max-loss-too-large",
+            `full premium loss ${Money.fromMicros(fullLoss).format()} USDC exceeds ` +
+              `${cap.format()} USDC (prediction.maxSingleContractLossBps ${pp.maxSingleContractLossBps})`,
+          );
+        }
+      }
+
+      if ((pf?.openPredictionPositions ?? 0) >= pp.maxConcurrentPositions) {
+        fail(
+          "too-many-positions",
+          `${pf?.openPredictionPositions} prediction positions are open, at the ${pp.maxConcurrentPositions} limit`,
+        );
+      }
+
+      if (pf?.correlationToOpenBps !== null && pf?.correlationToOpenBps !== undefined) {
+        if (pf.correlationToOpenBps > pp.maxCorrelationBps) {
+          fail(
+            "correlated-concentration",
+            `correlates ${pf.correlationToOpenBps} bps with an open position, above the ${pp.maxCorrelationBps} bps limit`,
+          );
+        }
+      }
+
+      const catCap = portfolio.totalValue.bps(pp.maxCategoryExposureBps);
+      const groupCap = portfolio.totalValue.bps(pp.maxCorrelationGroupExposureBps);
+      if (pf?.categoryExposureMicros !== undefined) {
+        const projected = pf.categoryExposureMicros + order.notional.micros;
+        if (projected > catCap.micros) {
+          fail(
+            "category-exposure-limit",
+            `category ${pf.category ?? "unknown"} exposure would reach ${Money.fromMicros(projected).format()} USDC, ` +
+              `above ${catCap.format()} USDC (${pp.maxCategoryExposureBps} bps)`,
+          );
+        }
+      }
+      if (pf?.correlationGroupExposureMicros !== undefined) {
+        const projected = pf.correlationGroupExposureMicros + order.notional.micros;
+        if (projected > groupCap.micros) {
+          fail(
+            "correlated-exposure-limit",
+            `correlation group ${pf.correlationGroup ?? "unknown"} exposure would reach ` +
+              `${Money.fromMicros(projected).format()} USDC, above ${groupCap.format()} USDC ` +
+              `(${pp.maxCorrelationGroupExposureBps} bps); this is one bet, not a portfolio`,
+          );
+        }
+      }
+
+      // Tradeable size in contracts. Enforced against the derived contract count
+      // the caller places in `OrderFacts.symbol` for prediction orders, and
+      // against the notional, so an absurd size cannot hide behind a rounding.
+      if (order.notional.lte(Money.zero())) {
+        fail("zero-notional", "prediction order has no notional");
+      }
+
+      // The prediction-path substitute for `execution.minNotionalUsdcMicros`.
+      //
+      // That floor exists because gas makes a tiny trade value-destroying. It is
+      // denominated in USDC and does not transfer to a contract book, where a
+      // trade costs a bps fee and spends no gas at all. The equivalent control is
+      // a minimum economic size, enforced as the cost of
+      // `prediction.minContractsAtomic` at the entry price, which only the caller
+      // knows. Fails closed when the caller supplies nothing — a caller that
+      // omits this cannot reach the trade, rather than defaulting to a pass.
+      if (pf?.minContractCostMicros === undefined) {
+        fail("invalid-market-data", "prediction order supplied no minimum-position cost");
+      } else if (order.notional.micros < pf.minContractCostMicros) {
+        fail(
+          "below-dust",
+          `prediction notional ${Money.fromMicros(order.notional.micros).format()} USDC is below the cost of one ` +
+            `minimum position (${Money.fromMicros(pf.minContractCostMicros).format()} USDC at ` +
+            `prediction.minContractsAtomic ${pp.minContractsAtomic})`,
+        );
+      }
+
+      // The net-edge floor, re-checked here rather than trusted from the caller.
+      //
+      // `execution.minExpectedEdgeBps` (15) is the on-chain floor and is far
+      // looser than what a contract book needs; `prediction.minNetEdgeBps` (250
+      // in the shipped profile) is the real control. Verifying it at the
+      // Constitution means a research layer that misreports its own arithmetic
+      // gets caught by the component that is not supposed to be trusting it.
+      if (pf?.netExpectedEdgeBps === undefined) {
+        fail("invalid-market-data", "prediction order supplied no net expected edge");
+      } else if (pf.netExpectedEdgeBps <= pp.minNetEdgeBps) {
+        fail(
+          "insufficient-edge",
+          `net expected edge ${pf.netExpectedEdgeBps} bps does not exceed the ${pp.minNetEdgeBps} bps ` +
+            "prediction floor after fees, spread, slippage and safety margin",
+        );
+      }
+    }
   }
 
   // --- 2. structural trade requirements ----------------------------------
@@ -265,7 +521,7 @@ export function evaluateOrder(
 
   // --- 4. notional bounds ------------------------------------------------
 
-  if (order.notional.micros < policy.execution.minNotionalUsdcMicros) {
+  if (order.instrument !== "prediction-contract" && order.notional.micros < policy.execution.minNotionalUsdcMicros) {
     fail(
       "below-dust",
       `notional ${order.notional.format()} USDC is below the ${Money.fromMicros(policy.execution.minNotionalUsdcMicros).format()} USDC minimum, where gas and fees dominate`,

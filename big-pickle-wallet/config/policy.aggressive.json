@@ -91,5 +91,53 @@
     "tripOnPolicyError": true,
     "maxConsecutiveReverts": 3,
     "positionBookDriftToleranceBps": 50
+  },
+
+  "prediction": {
+    "$comment": "ADDITIVE section. Every limit here is new and additional; nothing in assets/execution/risk is relaxed to accommodate prediction instruments. The assets.* floors above are denominated for on-chain token pools (a $50k liquidity floor) and describe a structurally different instrument: a prediction contract has no pool, no holders and no honeypot. A prediction order against a policy WITHOUT this section is refused outright rather than evaluated against limits that do not exist.",
+    "$comment_survival": "Calibrated for the $50 survival experiment. A $50 book cannot see $50,000 of depth, so the floors are denominated for contract books, not token pools. See docs/PREDICTION-MARKETS.md.",
+
+    "enabled": true,
+
+    "minTopOfBookLiquidityUsdcMicros": "5000000",
+    "minVolume24hUsdcMicros": "25000000",
+    "$comment_spread": "4% of the midpoint. Wider than a liquid crypto venue because prediction books are thin, and this is the single most effective cost gate in the whole engine.",
+    "maxSpreadBps": 400,
+
+    "$comment_edge": "Net edge is return on cost AFTER fees, spread, slippage and the safety margin. 2.5% on a $50 book is real money, which is the point: most candidates must be refused to reach it.",
+    "minNetEdgeBps": 250,
+    "$comment_safety": "Haircut applied to the raw estimate for model error and data staleness. Charged before the edge test, not after, so it can never be netted out.",
+    "safetyMarginBps": 150,
+
+    "$comment_freshness": "No entry on data older than 2 minutes. A prediction quote can gap while a 2-minute-old copy looks perfectly reasonable.",
+    "maxDataAgeMs": 120000,
+    "$comment_horizon": "No entry within 30 minutes of resolution: the remaining edge cannot be earned and the fill is pure adverse selection.",
+    "minMsToResolution": 1800000,
+
+    "$comment_premium": "A binary contract settles or it does not. The true worst case is the whole premium, so this is checked against the full premium, independent of any stop the model imagines.",
+    "maxSingleContractLossBps": 1500,
+    "maxPositionBps": 1200,
+    "maxOpenExposureBps": 6000,
+    "maxConcurrentPositions": 6,
+    "$comment_concentration": "Four 'unrelated' contracts about the same election are one bet. Category and correlation-group caps exist for that reason.",
+    "maxCategoryExposureBps": 4000,
+    "maxCorrelationGroupExposureBps": 3000,
+    "maxCorrelationBps": 7000,
+    "$comment_confidence": "Below this the estimate is noise dressed as a number.",
+    "minConfidence": 55,
+
+    "minContractsAtomic": "1000000",
+    "maxContractsAtomic": "40000000",
+    "$comment_kelly": "Quarter Kelly. Full Kelly on an uncertain probability is the fastest way to a $50 account on the way to zero.",
+    "kellyFractionBps": 2500,
+    "allowMaker": true,
+    "allowTaker": true,
+
+    "fees": {
+      "$comment": "takerFeeBps is floored at execution.assumedFeeBps by the schema, so the hard-limit engine's edge arithmetic can never be more permissive than the real fee. flatFeeMicrosPerContract models the per-contract schedules some venues use, charged IN ADDITION to the rate.",
+      "takerFeeBps": 100,
+      "makerFeeBps": 0,
+      "flatFeeMicrosPerContract": "0"
+    }
   }
 }

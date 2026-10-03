@@ -95,6 +95,89 @@ export interface CircuitBreakerPolicy {
   positionBookDriftToleranceBps: number;
 }
 
+/**
+ * Fees as a venue would charge them.
+ *
+ * `flatFeeMicrosPerContract` exists because that is how at least one real venue
+ * charges: a fixed amount per contract, not a percentage of notional. On a $0.62
+ * contract a 0.7% notional fee is under a cent, while a fixed fee can be a large
+ * fraction of the premium. Modelling only the percentage would make a
+ * per-contract fee schedule look harmless.
+ */
+export interface PredictionFeesPolicy {
+  takerFeeBps: number;
+  makerFeeBps: number;
+  flatFeeMicrosPerContract: bigint;
+}
+
+/**
+ * Prediction-market limits. Optional section, additive to every existing one.
+ *
+ * Calibration note, and it is the reason this section exists at all: the
+ * `assets` limits are denominated for on-chain token markets — a $50,000
+ * liquidity floor, a $100,000 daily volume floor, holder-concentration and
+ * honeypot checks. Those numbers describe an ERC-20 pool. A prediction contract
+ * on a regulated venue has no pool, no holders and no honeypot, and a $50 book
+ * will never see $50,000 of depth without absurd risk. Reusing those floors
+ * would either veto every opportunity (honest but useless) or require weakening
+ * them (unacceptable).
+ *
+ * So prediction instruments get their own calibrated section, and the on-chain
+ * section is left exactly as it was. Loading a prediction policy is *stricter*
+ * than before, because every limit here is new and additional.
+ */
+export interface PredictionPolicy {
+  /** Master switch for prediction-market instruments. */
+  enabled: boolean;
+  /** Minimum resting depth at top of book, micro-USDC, both sides combined. */
+  minTopOfBookLiquidityUsdcMicros: bigint;
+  /** Minimum 24h traded notional, micro-USDC. */
+  minVolume24hUsdcMicros: bigint;
+  /** Maximum spread, in basis points of the midpoint. */
+  maxSpreadBps: number;
+  /** Minimum net expected edge, in basis points of return on cost. */
+  minNetEdgeBps: number;
+  /** Discount applied to the estimate for model error and data staleness. */
+  safetyMarginBps: number;
+  /** Maximum age of any market datum before the candidate is refused. */
+  maxDataAgeMs: number;
+  /** Minimum time remaining until resolution before an entry is permitted. */
+  minMsToResolution: number;
+  /**
+   * Maximum loss on one contract as a fraction of bankroll, in bps.
+   *
+   * A binary contract's true worst case is the whole premium: it can resolve
+   * worthless. This is the bound the policy enforces, independent of any
+   * stop-out assumption.
+   */
+  maxSingleContractLossBps: number;
+  /** Maximum size of one contract position, bps of portfolio. */
+  maxPositionBps: number;
+  /** Maximum total open exposure, bps of portfolio. */
+  maxOpenExposureBps: number;
+  /** Maximum simultaneously open contract positions. */
+  maxConcurrentPositions: number;
+  /** Maximum open exposure in one category, bps of portfolio. */
+  maxCategoryExposureBps: number;
+  /** Maximum open exposure in one correlation group, bps of portfolio. */
+  maxCorrelationGroupExposureBps: number;
+  /** Correlation above which two positions are the same bet, bps. */
+  maxCorrelationBps: number;
+  /** Minimum estimator confidence, 0..100. */
+  minConfidence: number;
+  /** Minimum tradable size in atomic contract units (1e6 = 1 contract). */
+  minContractsAtomic: bigint;
+  /** Maximum tradable size in atomic contract units. */
+  maxContractsAtomic: bigint;
+  /** Fractional-Kelly multiplier for sizing, bps of full Kelly. */
+  kellyFractionBps: number;
+  /** Maker orders permitted. */
+  allowMaker: boolean;
+  /** Taker orders permitted. */
+  allowTaker: boolean;
+  fees: PredictionFeesPolicy;
+}
+
 export interface Policy {
   profile: string;
   version: number;
@@ -106,6 +189,12 @@ export interface Policy {
   exits: ExitsPolicy;
   concurrency: ConcurrencyPolicy;
   circuitBreaker: CircuitBreakerPolicy;
+  /**
+   * Prediction-market limits. Absent in a policy that predates this feature,
+   * in which case prediction instruments are refused outright by the engine
+   * rather than evaluated against limits that do not exist.
+   */
+  prediction?: PredictionPolicy;
   /** Absolute path this policy was loaded from. */
   sourcePath: string;
 }
@@ -396,6 +485,91 @@ function parseCircuitBreaker(raw: unknown): CircuitBreakerPolicy {
 
 // --- entry point ------------------------------------------------------------
 
+function parsePrediction(raw: unknown): PredictionPolicy {
+  const o = raw as Record<string, unknown>;
+  if (typeof o !== "object" || o === null || Array.isArray(o)) {
+    throw new PolicyConfigError("prediction must be an object");
+  }
+  const feesRaw = req(o, "fees", "prediction") as Record<string, unknown>;
+  if (typeof feesRaw !== "object" || feesRaw === null || Array.isArray(feesRaw)) {
+    throw new PolicyConfigError("prediction.fees must be an object");
+  }
+  const p: PredictionPolicy = {
+    enabled: reqBool(o, "enabled", "prediction"),
+    minTopOfBookLiquidityUsdcMicros: reqBigIntStr(o, "minTopOfBookLiquidityUsdcMicros", "prediction"),
+    minVolume24hUsdcMicros: reqBigIntStr(o, "minVolume24hUsdcMicros", "prediction"),
+    maxSpreadBps: reqBps(o, "maxSpreadBps", "prediction"),
+    minNetEdgeBps: reqBps(o, "minNetEdgeBps", "prediction", 100_000),
+    safetyMarginBps: reqBps(o, "safetyMarginBps", "prediction"),
+    maxDataAgeMs: reqInt(o, "maxDataAgeMs", "prediction"),
+    minMsToResolution: reqInt(o, "minMsToResolution", "prediction"),
+    maxSingleContractLossBps: reqBps(o, "maxSingleContractLossBps", "prediction"),
+    maxPositionBps: reqBps(o, "maxPositionBps", "prediction"),
+    maxOpenExposureBps: reqBps(o, "maxOpenExposureBps", "prediction"),
+    maxConcurrentPositions: reqInt(o, "maxConcurrentPositions", "prediction"),
+    maxCategoryExposureBps: reqBps(o, "maxCategoryExposureBps", "prediction"),
+    maxCorrelationGroupExposureBps: reqBps(o, "maxCorrelationGroupExposureBps", "prediction"),
+    maxCorrelationBps: reqBps(o, "maxCorrelationBps", "prediction"),
+    minConfidence: reqInt(o, "minConfidence", "prediction"),
+    minContractsAtomic: reqBigIntStr(o, "minContractsAtomic", "prediction"),
+    maxContractsAtomic: reqBigIntStr(o, "maxContractsAtomic", "prediction"),
+    kellyFractionBps: reqInt(o, "kellyFractionBps", "prediction"),
+    allowMaker: reqBool(o, "allowMaker", "prediction"),
+    allowTaker: reqBool(o, "allowTaker", "prediction"),
+    fees: {
+      takerFeeBps: reqBps(feesRaw, "takerFeeBps", "prediction.fees", 100_000),
+      makerFeeBps: reqBps(feesRaw, "makerFeeBps", "prediction.fees", 100_000),
+      flatFeeMicrosPerContract: reqBigIntStr(feesRaw, "flatFeeMicrosPerContract", "prediction.fees"),
+    },
+  };
+
+  if (p.maxDataAgeMs < 0) throw new PolicyConfigError("prediction.maxDataAgeMs must be non-negative");
+  if (p.minMsToResolution < 0) throw new PolicyConfigError("prediction.minMsToResolution must be non-negative");
+  if (p.minConfidence < 0 || p.minConfidence > 100) {
+    throw new PolicyConfigError(`prediction.minConfidence must be 0..100, got ${p.minConfidence}`);
+  }
+  if (p.maxConcurrentPositions < 1) {
+    throw new PolicyConfigError("prediction.maxConcurrentPositions must be at least 1");
+  }
+  if (p.kellyFractionBps < 0 || p.kellyFractionBps > 10_000) {
+    throw new PolicyConfigError(
+      `prediction.kellyFractionBps must be 0..10000 (full Kelly to zero), got ${p.kellyFractionBps}`,
+    );
+  }
+  if (!p.allowMaker && !p.allowTaker) {
+    throw new PolicyConfigError(
+      "prediction.allowMaker and prediction.allowTaker are both false: prediction instruments would be untradeable",
+    );
+  }
+  if (p.minContractsAtomic <= 0n) {
+    throw new PolicyConfigError("prediction.minContractsAtomic must be at least 1 atomic unit");
+  }
+  if (p.maxContractsAtomic < p.minContractsAtomic) {
+    throw new PolicyConfigError(
+      `prediction.maxContractsAtomic (${p.maxContractsAtomic}) is below prediction.minContractsAtomic (${p.minContractsAtomic})`,
+    );
+  }
+  if (p.minNetEdgeBps === 0 && p.safetyMarginBps === 0) {
+    throw new PolicyConfigError(
+      "prediction.minNetEdgeBps is 0 and prediction.safetyMarginBps is 0: a zero-edge candidate could be traded, " +
+        "paying fees to do nothing",
+    );
+  }
+  if (p.maxPositionBps > p.maxOpenExposureBps) {
+    throw new PolicyConfigError(
+      `prediction.maxPositionBps (${p.maxPositionBps}) exceeds prediction.maxOpenExposureBps (${p.maxOpenExposureBps}); ` +
+        "a single position could be larger than the whole book",
+    );
+  }
+  if (p.maxCorrelationGroupExposureBps > p.maxOpenExposureBps) {
+    throw new PolicyConfigError(
+      `prediction.maxCorrelationGroupExposureBps (${p.maxCorrelationGroupExposureBps}) exceeds ` +
+        `prediction.maxOpenExposureBps (${p.maxOpenExposureBps}); the group cap could never bind`,
+    );
+  }
+  return p;
+}
+
 export function parsePolicy(raw: unknown, sourcePath: string): Policy {
   if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
     throw new PolicyConfigError("policy file must contain a JSON object");
@@ -413,6 +587,7 @@ export function parsePolicy(raw: unknown, sourcePath: string): Policy {
     exits: parseExits(o["exits"]),
     concurrency: parseConcurrency(o["concurrency"]),
     circuitBreaker: parseCircuitBreaker(o["circuitBreaker"]),
+    ...(o["prediction"] === undefined ? {} : { prediction: parsePrediction(o["prediction"]) }),
     sourcePath,
   };
 
@@ -458,6 +633,36 @@ function assertPolicyCoherence(p: Policy): void {
     throw new PolicyConfigError(
       `assets.allowlist and assets.denylist both contain: ${assetOverlap.join(", ")}. An address on both lists is ambiguous and is refused rather than silently resolved.`,
     );
+  }
+
+  // Prediction fee model versus the engine's edge arithmetic.
+  //
+  // `netEdgeBps()` in the engine subtracts `execution.assumedFeeBps`, the flat
+  // assumption the existing crypto path was calibrated on. If a prediction fee
+  // schedule came in below it, the engine's edge check would be *more*
+  // permissive than the strategy that produced the proposal — the exact inversion
+  // of what this layer exists to prevent. Refuse to load rather than clamp.
+  const pr = p.prediction;
+  if (pr?.enabled) {
+    if (pr.fees.takerFeeBps < p.execution.assumedFeeBps) {
+      throw new PolicyConfigError(
+        `prediction.fees.takerFeeBps (${pr.fees.takerFeeBps}) is below execution.assumedFeeBps ` +
+          `(${p.execution.assumedFeeBps}). The hard-limit engine would then net out a smaller fee than the ` +
+          "strategy actually pays, which weakens an existing control. Refusing to load.",
+      );
+    }
+    if (pr.maxSingleContractLossBps > p.risk.maxSingleTradeBps) {
+      throw new PolicyConfigError(
+        `prediction.maxSingleContractLossBps (${pr.maxSingleContractLossBps}) exceeds ` +
+          `risk.maxSingleTradeBps (${p.risk.maxSingleTradeBps}); a contract could lose more than one trade is allowed to risk`,
+      );
+    }
+    if (pr.minNetEdgeBps < p.execution.minExpectedEdgeBps) {
+      throw new PolicyConfigError(
+        `prediction.minNetEdgeBps (${pr.minNetEdgeBps}) is below execution.minExpectedEdgeBps ` +
+          `(${p.execution.minExpectedEdgeBps}); the prediction edge gate would be looser than the existing one`,
+      );
+    }
   }
 }
 
